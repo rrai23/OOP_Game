@@ -26,12 +26,17 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
 
     // Game loop timer (Swing Timer)
     private final Timer timer;
+    
+    // Audio manager for sound effects
+    private final AudioManager audioManager;
 
     // Game state
     private Character player;
     private Boss boss;
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<Item> items = new ArrayList<>();
+    private final List<DamageNumber> damageNumbers = new ArrayList<>();
+    private final List<Particle> particles = new ArrayList<>();
     private final Random random = new Random();
 
     private int level = 1;
@@ -40,6 +45,11 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     private boolean selectingMode = false;
     private boolean selectingDifficulty = false;
     private boolean paused = false;
+    
+    // Screen shake effect
+    private int shakeOffsetX = 0;
+    private int shakeOffsetY = 0;
+    private long shakeUntilMs = 0;
     
     // Game modes
     private boolean endlessMode = false;
@@ -56,12 +66,16 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     private long explosionUntilMs = 0;
     private int explosionX = 0;
     private int explosionY = 0;
+    // Deflection effect timing
+    private long deflectionUntilMs = 0;
+    private int deflectionX = 0;
+    private int deflectionY = 0;
     // Item spawn timing
     private long lastItemSpawnMs = System.currentTimeMillis();
     private long nextItemSpawnMs = System.currentTimeMillis() + getRandomSpawnDelay();
 
     // Input state
-    private boolean up, down, left, right, attacking;
+    private boolean up, down, left, right, attacking, dashing;
 
     public GamePanel() {
         setPreferredSize(new Dimension(WIDTH, HEIGHT));
@@ -72,6 +86,9 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         // Start with mode selection, don't spawn boss yet
         selectingMode = true;
         selectingCharacter = false;
+        
+        // Initialize audio manager
+        audioManager = new AudioManager();
 
         // 60 FPS equivalent ~16ms
         timer = new Timer(16, this);
@@ -125,18 +142,50 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     private void updateGame() {
         // Move player based on input
         if (player != null) {
-            int prevX = player.getX();
-            int prevY = player.getY();
-            int dx = 0, dy = 0;
-            if (up) dy -= 1;
-            if (down) dy += 1;
-            if (left) dx -= 1;
-            if (right) dx += 1;
-            player.move(dx, dy, WIDTH, HEIGHT);
-            // Prevent overlapping with boss
-            if (boss != null && collidesPlayerBoss(player, boss)) {
-                player.setX(prevX);
-                player.setY(prevY);
+            // Handle dash input
+            if (dashing && player.canDash()) {
+                int dx = 0, dy = 0;
+                if (up) dy -= 1;
+                if (down) dy += 1;
+                if (left) dx -= 1;
+                if (right) dx += 1;
+                
+                // Normalize direction if moving diagonally
+                if (dx != 0 || dy != 0) {
+                    double len = Math.sqrt(dx * dx + dy * dy);
+                    player.startDash(dx / len, dy / len);
+                    audioManager.playSound("dash"); // Dash sound effect
+                }
+                dashing = false; // Reset dash input
+            }
+            
+            // Update dash movement with collision check
+            if (player.isDashing()) {
+                int prevX = player.getX();
+                int prevY = player.getY();
+                player.updateDash(WIDTH, HEIGHT);
+                // Prevent dashing into boss
+                if (boss != null && collidesPlayerBoss(player, boss)) {
+                    player.setX(prevX);
+                    player.setY(prevY);
+                }
+            }
+            
+            // Regular movement only if not dashing
+            if (!player.isDashing()) {
+                int prevX = player.getX();
+                int prevY = player.getY();
+                int dx = 0, dy = 0;
+                if (up) dy -= 1;
+                if (down) dy += 1;
+                if (left) dx -= 1;
+                if (right) dx += 1;
+                player.move(dx, dy, WIDTH, HEIGHT);
+                // Prevent overlapping with boss
+                if (boss != null && collidesPlayerBoss(player, boss)) {
+                    player.setX(prevX);
+                    player.setY(prevY);
+                }
             }
         }
 
@@ -146,29 +195,11 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             boss.attackPattern(projectiles, player);
         }
 
-        // Mage ranged attack: fire staff projectile toward boss when attacking and weak point is open
-        if (attacking && player instanceof Mage && boss != null && boss.isWeakPointActive()) {
-            Mage m = (Mage) player;
-            if (m.canAttack()) {
-                double sx = m.getX() + m.getWidth() / 2.0;
-                double sy = m.getY() + m.getHeight() / 2.0;
-                double bx = boss.getX() + boss.getSize() / 2.0;
-                double by = boss.getY() + boss.getSize() / 2.0;
-                double dx = bx - sx;
-                double dy = by - sy;
-                double len = Math.max(1, Math.hypot(dx, dy));
-                double speed = 6.0;
-                double vx = dx / len * speed;
-                double vy = dy / len * speed;
-                projectiles.add(new PlayerProjectile(sx, sy, vx, vy, m.getAttackPower()));
-                m.markAttack();
-            }
-        }
-
         // Mage ranged attack: allow firing anytime while attacking
         if (attacking && player instanceof Mage && boss != null) {
             Mage m = (Mage) player;
             if (m.canAttack()) {
+                audioManager.playSound("mage");
                 double sx = m.getX() + m.getWidth() / 2.0;
                 double sy = m.getY() + m.getHeight() / 2.0;
                 double bx = boss.getX() + boss.getSize() / 2.0;
@@ -197,9 +228,11 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             // Collision with player (ignore player projectiles and shield immunity)
             if (!(p instanceof PlayerProjectile) && player != null && p.collidesWith(player)) {
                 long currentTime = System.currentTimeMillis();
-                if (currentTime >= shieldUntilMs) {
-                    // Only take damage if shield is not active
+                // Invincible during dash or shield
+                if (currentTime >= shieldUntilMs && !player.isDashing()) {
+                    // Only take damage if shield is not active and not dashing
                     player.setHealth(player.getHealth() - p.getDamage());
+                    audioManager.playSound("damage");
                     // Trigger hit flash indicator for a short duration
                     playerHitFlashUntilMs = currentTime + 200; // 200ms flash
                 }
@@ -211,7 +244,15 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
                 PlayerProjectile pp = (PlayerProjectile) p;
                 if (pp.collidesWithBoss(boss)) {
                     if (boss.isWeakPointActive()) {
-                        boss.setHealth(boss.getHealth() - pp.getDamage());
+                        int damage = pp.getDamage();
+                        boss.setHealth(boss.getHealth() - damage);
+                        audioManager.playSound("boss_hit");
+                        // Add damage number
+                        damageNumbers.add(new DamageNumber(damage, 
+                            boss.getX() + boss.getSize() / 2.0, 
+                            boss.getY() + boss.getSize() / 2.0));
+                        // Screen shake
+                        shakeUntilMs = System.currentTimeMillis() + 100;
                         // Award score for hitting boss
                         score += (int)(10 * scoreMultiplier);
                     }
@@ -225,6 +266,7 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
 
         // Check win/loss
         if (player != null && player.getHealth() <= 0) {
+            audioManager.playSound("lose");
             running = false; // Game over
         }
         if (boss != null && boss.getHealth() <= 0) {
@@ -233,8 +275,10 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             
             level++;
             if (!endlessMode && level > 4) {
+                audioManager.playSound("won");
                 running = false; // Game win (levels mode only)
             } else {
+                audioManager.playSound("level_next");
                 projectiles.clear();
                 items.clear(); // Clear items on level transition
                 
@@ -269,20 +313,67 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         while (itemIt.hasNext()) {
             Item item = itemIt.next();
             if (player != null && item.collidesWith(player)) {
-                if (item instanceof ShieldItem) {
-                    // Activate shield for 5 seconds
-                    shieldUntilMs = System.currentTimeMillis() + 5000;
-                } else if (item instanceof BombItem) {
+                if (item instanceof BombItem) {
+                    audioManager.playSound("boom");
                     // Trigger hit flash when bomb damages player
                     playerHitFlashUntilMs = System.currentTimeMillis() + 300;
-                    // Trigger explosion animation
+                    // Trigger explosion animation and screen shake
                     explosionUntilMs = System.currentTimeMillis() + 500;
+                    shakeUntilMs = System.currentTimeMillis() + 300;
                     explosionX = item.getX();
                     explosionY = item.getY();
+                } else {
+                    audioManager.playSound("pick_uped");
+                    if (item instanceof ShieldItem) {
+                        // Activate shield for 5 seconds
+                        shieldUntilMs = System.currentTimeMillis() + 5000;
+                    }
                 }
                 item.applyEffect(player, projectiles);
                 itemIt.remove();
             }
+        }
+        
+        // Update damage numbers
+        Iterator<DamageNumber> dnIt = damageNumbers.iterator();
+        while (dnIt.hasNext()) {
+            DamageNumber dn = dnIt.next();
+            dn.update();
+            if (dn.isExpired()) {
+                dnIt.remove();
+            }
+        }
+        
+        // Update particles
+        Iterator<Particle> partIt = particles.iterator();
+        while (partIt.hasNext()) {
+            Particle p = partIt.next();
+            p.update();
+            if (p.isExpired()) {
+                partIt.remove();
+            }
+        }
+        
+        // Spawn particle trails for projectiles
+        if (random.nextInt(3) == 0) { // Not every frame to avoid too many particles
+            for (Projectile p : projectiles) {
+                Color trailColor = (p instanceof PlayerProjectile) ? 
+                    new Color(255, 200, 100) : new Color(200, 50, 50);
+                particles.add(Particle.createTrailParticle(
+                    p.getX() + p.getSize() / 2.0, 
+                    p.getY() + p.getSize() / 2.0, 
+                    trailColor
+                ));
+            }
+        }
+        
+        // Update screen shake
+        if (System.currentTimeMillis() < shakeUntilMs) {
+            shakeOffsetX = random.nextInt(11) - 5; // -5 to +5
+            shakeOffsetY = random.nextInt(11) - 5;
+        } else {
+            shakeOffsetX = 0;
+            shakeOffsetY = 0;
         }
     }
 
@@ -306,6 +397,9 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
+        
+        // Apply screen shake offset
+        g.translate(shakeOffsetX, shakeOffsetY);
 
         // Draw arena boundary
         g.setColor(Color.DARK_GRAY);
@@ -334,7 +428,18 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             // If recently hit, draw a flashing overlay
             boolean flashing = System.currentTimeMillis() < playerHitFlashUntilMs;
             boolean shielded = System.currentTimeMillis() < shieldUntilMs;
+            boolean isDashing = player.isDashing();
+            
+            // Draw dash trail effect
+            if (isDashing) {
+                g.setColor(new Color(255, 255, 255, 100));
+                int trailSize = 8;
+                g.fillRect(player.getX() - trailSize/2, player.getY() - trailSize/2, 
+                          player.getWidth() + trailSize, player.getHeight() + trailSize);
+            }
+            
             player.draw(g);
+            
             if (flashing) {
                 g.setColor(new Color(255, 0, 0, 120));
                 g.fillRect(player.getX(), player.getY(), player.getWidth(), player.getHeight());
@@ -353,6 +458,18 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         // Draw boss
         if (boss != null) {
             boss.draw(g);
+            
+            // Draw glowing effect around boss when weak point is active
+            if (boss.isWeakPointActive()) {
+                // Pulsing glow
+                double pulse = Math.sin(System.currentTimeMillis() * 0.01) * 0.5 + 0.5;
+                int glowAlpha = (int)(150 * pulse);
+                g.setColor(new Color(255, 255, 0, glowAlpha));
+                int glowSize = (int)(boss.getSize() + 20 + pulse * 10);
+                int bossCenterX = boss.getX() + boss.getSize() / 2;
+                int bossCenterY = boss.getY() + boss.getSize() / 2;
+                g.fillOval(bossCenterX - glowSize / 2, bossCenterY - glowSize / 2, glowSize, glowSize);
+            }
         }
 
         // Draw projectiles
@@ -386,6 +503,34 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             g.setColor(new Color(255, 255, 255, Math.max(0, alpha + 55)));
             int coreSize = explosionSize / 3;
             g.fillOval(explosionX - coreSize/2, explosionY - coreSize/2, coreSize, coreSize);
+        }
+        
+        // Draw deflection spark effect if active
+        if (currentTime < deflectionUntilMs) {
+            long elapsed = currentTime - (deflectionUntilMs - 200);
+            double progress = elapsed / 200.0;
+            int sparkSize = (int)((1.0 - progress) * 30);
+            int alpha = (int)((1.0 - progress) * 255);
+            
+            // Draw spark burst (cyan/white for deflection)
+            g.setColor(new Color(100, 255, 255, Math.max(0, alpha)));
+            g.fillOval(deflectionX - sparkSize/2, deflectionY - sparkSize/2, sparkSize, sparkSize);
+            
+            // Draw cross pattern for impact effect
+            g.setColor(new Color(255, 255, 255, Math.max(0, alpha)));
+            int lineLen = sparkSize / 2;
+            g.drawLine(deflectionX - lineLen, deflectionY, deflectionX + lineLen, deflectionY);
+            g.drawLine(deflectionX, deflectionY - lineLen, deflectionX, deflectionY + lineLen);
+        }
+        
+        // Draw particles
+        for (Particle particle : particles) {
+            particle.draw(g);
+        }
+        
+        // Draw damage numbers
+        for (DamageNumber dn : damageNumbers) {
+            dn.draw(g);
         }
 
         // Draw shield timer above player if active
@@ -743,12 +888,73 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
     // Player attack: weapon must reach boss; damage gated inside Character.attack
     private void updatePlayerAttack() {
         if (attacking && player != null && boss != null) {
+            // Check if this is Warrior or Rogue for special abilities
+            boolean isWarriorOrRogue = (player instanceof Warrior || player instanceof Rogue);
+            boolean justAttacked = player.canAttack(); // Check if we're off cooldown (about to attack)
+            
+            // Warrior and Rogue can destroy projectiles with their weapon
+            if (isWarriorOrRogue && justAttacked) {
+                int[][] weaponBox = player.getWeaponHitbox(boss);
+                int[] xs = weaponBox[0];
+                int[] ys = weaponBox[1];
+                int minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+                for (int i = 1; i < xs.length; i++) {
+                    if (xs[i] < minX) minX = xs[i];
+                    if (xs[i] > maxX) maxX = xs[i];
+                    if (ys[i] < minY) minY = ys[i];
+                    if (ys[i] > maxY) maxY = ys[i];
+                }
+                
+                // Check for projectile collisions with weapon
+                Iterator<Projectile> projIt = projectiles.iterator();
+                boolean deflectedAny = false;
+                while (projIt.hasNext()) {
+                    Projectile p = projIt.next();
+                    // Only destroy enemy projectiles, not player projectiles
+                    if (!(p instanceof PlayerProjectile)) {
+                        int px = (int)p.getX();
+                        int py = (int)p.getY();
+                        int pSize = p.getSize();
+                        
+                        // Simple AABB collision check
+                        if (!(px + pSize < minX || px > maxX || py + pSize < minY || py > maxY)) {
+                            // Trigger deflection animation
+                            deflectionUntilMs = System.currentTimeMillis() + 200;
+                            deflectionX = px;
+                            deflectionY = py;
+                            deflectedAny = true;
+                            projIt.remove();
+                            score += (int)(5 * scoreMultiplier); // Small bonus for deflecting
+                        }
+                    }
+                }
+                
+                // Play deflection sound if any projectiles were destroyed
+                if (deflectedAny) {
+                    audioManager.playSound("boss_hit");
+                }
+            }
+            
             if (weaponHitsBoss(player, boss)) {
                 int healthBefore = boss.getHealth();
                 player.attack(boss);
                 int healthAfter = boss.getHealth();
+                
+                // Play slash sound when Warrior or Rogue swing (regardless of damage)
+                if (isWarriorOrRogue && justAttacked) {
+                    audioManager.playSound("slash");
+                }
+                
                 // Award score if damage was dealt
                 if (healthAfter < healthBefore) {
+                    int damage = healthBefore - healthAfter;
+                    audioManager.playSound("boss_hit");
+                    // Add damage number
+                    damageNumbers.add(new DamageNumber(damage, 
+                        boss.getX() + boss.getSize() / 2.0, 
+                        boss.getY() + boss.getSize() / 2.0));
+                    // Screen shake
+                    shakeUntilMs = System.currentTimeMillis() + 100;
                     score += (int)(10 * scoreMultiplier);
                 }
             }
@@ -799,17 +1005,84 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         int scoreWidth = g.getFontMetrics().stringWidth(scoreText);
         g.drawString(scoreText, WIDTH - scoreWidth - 50, topY);
 
-        // Top-center: Boss info
+        // Boss health bar at top center
         if (boss != null) {
+            int barWidth = 300;
+            int barHeight = 25;
+            int barX = WIDTH / 2 - barWidth / 2;
+            int barY = 50;
+            
+            // Background
+            g.setColor(new Color(50, 50, 50));
+            g.fillRect(barX, barY, barWidth, barHeight);
+            
+            // Health fill
+            double healthPercent = (double) boss.getHealth() / boss.getMaxHealth();
+            int fillWidth = (int) (barWidth * healthPercent);
+            
+            // Color based on health
+            Color healthColor;
+            if (healthPercent > 0.6) {
+                healthColor = new Color(0, 200, 0);
+            } else if (healthPercent > 0.3) {
+                healthColor = new Color(255, 200, 0);
+            } else {
+                healthColor = new Color(255, 50, 50);
+            }
+            g.setColor(healthColor);
+            g.fillRect(barX, barY, fillWidth, barHeight);
+            
+            // Border
             g.setColor(Color.WHITE);
-            g.setFont(new Font("Arial", Font.PLAIN, 14));
-            String bossInfo = "Boss HP: " + boss.getHealth() + "    Weak Point: " + (boss.isWeakPointActive() ? "OPEN" : "CLOSED");
-            int centerX = WIDTH / 2 - g.getFontMetrics().stringWidth(bossInfo) / 2;
-            g.drawString(bossInfo, centerX, topY);
+            g.drawRect(barX, barY, barWidth, barHeight);
+            
+            // Boss HP text
+            g.setFont(new Font("Arial", Font.BOLD, 14));
+            String bossText = "BOSS: " + boss.getHealth() + " / " + boss.getMaxHealth();
+            int textWidth = g.getFontMetrics().stringWidth(bossText);
+            g.drawString(bossText, WIDTH / 2 - textWidth / 2, barY + 18);
+            
+            // Weak point indicator
+            g.setFont(new Font("Arial", Font.PLAIN, 12));
+            String wpText = boss.isWeakPointActive() ? "WEAK POINT OPEN!" : "Weak Point Closed";
+            Color wpColor = boss.isWeakPointActive() ? new Color(255, 255, 0) : new Color(150, 150, 150);
+            g.setColor(wpColor);
+            int wpWidth = g.getFontMetrics().stringWidth(wpText);
+            g.drawString(wpText, WIDTH / 2 - wpWidth / 2, barY + barHeight + 15);
+        }
+        
+        // Attack cooldown indicator
+        if (player != null && attacking) {
+            long now = System.currentTimeMillis();
+            long timeSinceAttack = now - player.getLastAttackTime();
+            long cooldown = player.getAttackCooldown();
+            
+            if (timeSinceAttack < cooldown) {
+                double cooldownPercent = (double) timeSinceAttack / cooldown;
+                
+                int cdSize = 40;
+                int cdX = player.getX() + player.getWidth() / 2 - cdSize / 2;
+                int cdY = player.getY() - cdSize - 5;
+                
+                // Background circle
+                g.setColor(new Color(50, 50, 50, 150));
+                g.fillOval(cdX, cdY, cdSize, cdSize);
+                
+                // Cooldown arc (fills as cooldown progresses)
+                g.setColor(new Color(100, 200, 255, 200));
+                int arcAngle = (int) (360 * cooldownPercent);
+                g.fillArc(cdX, cdY, cdSize, cdSize, 90, -arcAngle);
+                
+                // Border
+                g.setColor(Color.WHITE);
+                g.drawOval(cdX, cdY, cdSize, cdSize);
+            }
         }
 
         // Bottom-center: Controls to avoid overlapping top info
-        String controls = "Move: Arrow Keys    Attack: SPACE    Pause: P    Restart: R";
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("Arial", Font.PLAIN, 14));
+        String controls = "Move: Arrow Keys    Attack: SPACE    Dash: SHIFT (Warrior/Rogue)    Pause: P    Restart: R";
         int controlsY = HEIGHT - 18;
         int controlsX = WIDTH / 2 - g.getFontMetrics().stringWidth(controls) / 2;
         g.drawString(controls, controlsX, controlsY);
@@ -827,12 +1100,14 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         if (selectingMode) {
             if (code == KeyEvent.VK_1) {
                 // Levels mode
+                audioManager.playSound("click");
                 endlessMode = false;
                 selectingMode = false;
                 selectingCharacter = true;
                 scoreMultiplier = 1.0;
             } else if (code == KeyEvent.VK_2) {
                 // Endless mode - go to difficulty selection
+                audioManager.playSound("click");
                 endlessMode = true;
                 selectingMode = false;
                 selectingDifficulty = true;
@@ -844,18 +1119,21 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         if (selectingDifficulty) {
             if (code == KeyEvent.VK_1) {
                 // Easy
+                audioManager.playSound("click");
                 difficulty = "EASY";
                 scoreMultiplier = 1.0;
                 selectingDifficulty = false;
                 selectingCharacter = true;
             } else if (code == KeyEvent.VK_2) {
                 // Medium
+                audioManager.playSound("click");
                 difficulty = "MEDIUM";
                 scoreMultiplier = 1.5;
                 selectingDifficulty = false;
                 selectingCharacter = true;
             } else if (code == KeyEvent.VK_3) {
                 // Nightmare
+                audioManager.playSound("click");
                 difficulty = "NIGHTMARE";
                 scoreMultiplier = 2.5;
                 selectingDifficulty = false;
@@ -867,16 +1145,19 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
         // Character selection
         if (selectingCharacter) {
             if (code == KeyEvent.VK_1) {
+                audioManager.playSound("click");
                 player = new Warrior(WIDTH / 2 - 20, HEIGHT - 100);
                 selectingCharacter = false;
                 spawnBossForLevel(level);
                 spawnDefaultPlayer();
             } else if (code == KeyEvent.VK_2) {
+                audioManager.playSound("click");
                 player = new Rogue(WIDTH / 2 - 20, HEIGHT - 100);
                 selectingCharacter = false;
                 spawnBossForLevel(level);
                 spawnDefaultPlayer();
             } else if (code == KeyEvent.VK_3) {
+                audioManager.playSound("click");
                 player = new Mage(WIDTH / 2 - 20, HEIGHT - 100);
                 selectingCharacter = false;
                 spawnBossForLevel(level);
@@ -891,6 +1172,7 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             case KeyEvent.VK_LEFT:  left = true; break;
             case KeyEvent.VK_RIGHT: right = true; break;
             case KeyEvent.VK_SPACE: attacking = true; break;
+            case KeyEvent.VK_SHIFT: dashing = true; break;
             case KeyEvent.VK_P:
                 paused = !paused;
                 break;
@@ -909,6 +1191,7 @@ public class GamePanel extends JPanel implements ActionListener, KeyListener {
             case KeyEvent.VK_LEFT:  left = false; break;
             case KeyEvent.VK_RIGHT: right = false; break;
             case KeyEvent.VK_SPACE: attacking = false; break;
+            case KeyEvent.VK_SHIFT: dashing = false; break;
             case KeyEvent.VK_P: /* no-op on release */ break;
         }
     }

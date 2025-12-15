@@ -45,4 +45,28 @@ public class Rogue extends Character {
 
     @Override
     protected double getSwingArcRadians() { return Math.toRadians(70); } // tighter, faster arc
+    
+    // Dash ability for Rogue - faster cooldown
+    @Override
+    public boolean canDash() {
+        long now = System.currentTimeMillis();
+        return (now - getLastDashTime()) >= getDashCooldownMs() && !isDashing();
+    }
+    
+    @Override
+    public void startDash(double dirX, double dirY) {
+        if (canDash()) {
+            super.startDash(dirX, dirY);
+        }
+    }
+    
+    @Override
+    protected long getDashCooldownMs() {
+        return 1000; // 1 second cooldown for rogue (faster than warrior)
+    }
+    
+    @Override
+    protected int getDashSpeed() {
+        return 20; // Rogue dashes faster
+    }
 }

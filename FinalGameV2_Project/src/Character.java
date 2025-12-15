@@ -18,6 +18,11 @@ public abstract class Character {
     // Attack timing for animations/cooldowns
     private long lastAttackMs = 0;
     private long swingStartMs = -1;
+    // Dash timing and state
+    private long lastDashMs = 0;
+    private long dashStartMs = -1;
+    private double dashDirX = 0;
+    private double dashDirY = 0;
 
     public Character(int x, int y, int width, int height, int speed, int health, int attackPower) {
         this.x = x;
@@ -170,4 +175,66 @@ public abstract class Character {
     protected abstract long getAttackCooldownMs();
     protected abstract long getSwingDurationMs();
     protected abstract double getSwingArcRadians();
+    
+    // Public accessors for cooldown indicator
+    public long getLastAttackTime() {
+        return lastAttackMs;
+    }
+    
+    public long getAttackCooldown() {
+        return getAttackCooldownMs();
+    }
+    
+    public long getLastDashTime() {
+        return lastDashMs;
+    }
+    
+    // Dash system - only for warrior and rogue
+    public boolean canDash() {
+        return false; // Override in subclasses that can dash
+    }
+    
+    public void startDash(double dirX, double dirY) {
+        long now = System.currentTimeMillis();
+        lastDashMs = now;
+        dashStartMs = now;
+        dashDirX = dirX;
+        dashDirY = dirY;
+    }
+    
+    public boolean isDashing() {
+        if (dashStartMs < 0) return false;
+        long now = System.currentTimeMillis();
+        return (now - dashStartMs) < getDashDurationMs();
+    }
+    
+    public void updateDash(int arenaW, int arenaH) {
+        if (isDashing()) {
+            // Move in dash direction at high speed
+            int dashSpeed = getDashSpeed();
+            x += (int)(dashDirX * dashSpeed);
+            y += (int)(dashDirY * dashSpeed);
+            // Constrain to arena
+            int minX = 40;
+            int minY = 40;
+            int maxX = arenaW - 40 - width;
+            int maxY = arenaH - 40 - height;
+            if (x < minX) x = minX;
+            if (y < minY) y = minY;
+            if (x > maxX) x = maxX;
+            if (y > maxY) y = maxY;
+        }
+    }
+    
+    protected long getDashCooldownMs() {
+        return 1000; // 1 second default
+    }
+    
+    protected long getDashDurationMs() {
+        return 150; // 150ms dash
+    }
+    
+    protected int getDashSpeed() {
+        return 15; // Fast dash speed
+    }
 }

@@ -47,37 +47,6 @@ public abstract class Boss {
     public void draw(Graphics g) {
         g.setColor(weakPointActive ? Color.RED : Color.ORANGE);
         g.fillOval(x, y, size, size);
-        
-        // Draw health bar above boss
-        int barWidth = 100;
-        int barHeight = 8;
-        int barX = x + (size - barWidth) / 2;
-        int barY = y - 15;
-        
-        // Background (dark red)
-        g.setColor(new Color(100, 0, 0));
-        g.fillRect(barX, barY, barWidth, barHeight);
-        
-        // Health (green to red gradient based on health)
-        double healthPercent = (double) health / maxHealth;
-        int currentBarWidth = (int) (barWidth * healthPercent);
-        
-        // Color transitions: green -> yellow -> red
-        Color healthColor;
-        if (healthPercent > 0.6) {
-            healthColor = Color.GREEN;
-        } else if (healthPercent > 0.3) {
-            healthColor = Color.YELLOW;
-        } else {
-            healthColor = Color.RED;
-        }
-        
-        g.setColor(healthColor);
-        g.fillRect(barX, barY, currentBarWidth, barHeight);
-        
-        // Border
-        g.setColor(Color.WHITE);
-        g.drawRect(barX, barY, barWidth, barHeight);
     }
 
     public abstract void attackPattern(List<Projectile> projectiles, Character player);

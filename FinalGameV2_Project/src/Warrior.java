@@ -45,4 +45,23 @@ public class Warrior extends Character {
 
     @Override
     protected double getSwingArcRadians() { return Math.toRadians(120); } // wide sword arc
+    
+    // Dash ability for Warrior
+    @Override
+    public boolean canDash() {
+        long now = System.currentTimeMillis();
+        return (now - getLastDashTime()) >= getDashCooldownMs() && !isDashing();
+    }
+    
+    @Override
+    public void startDash(double dirX, double dirY) {
+        if (canDash()) {
+            super.startDash(dirX, dirY);
+        }
+    }
+    
+    @Override
+    protected long getDashCooldownMs() {
+        return 2000; // 2 second cooldown for warrior
+    }
 }
